@@ -1,6 +1,7 @@
 """
 Interactive wizard — walks the user through all distro config options.
 Returns a manifest dict ready for the build engine.
+Supports two modes: Remaster (from ISO) and Build System (from scratch).
 """
 
 import os
@@ -86,27 +87,90 @@ def run_wizard():
     print("Let's build your distro. Answer the questions below.\n")
     print("─" * 44)
 
+    # ── Step 0: Build Mode ──────────────────────────────────
+    print("\n🔧 Build Mode\n")
+    mode = ask_choice(
+        "How do you want to build?",
+        [
+            "Remaster — Modify an existing RHEL/CentOS ISO",
+            "Build System — Compose a fresh ISO from upstream repos",
+        ],
+        default=1
+    )
+    is_build_system = "Build System" in mode
+
     manifest = {}
+    manifest["build_mode"] = "build_system" if is_build_system else "remaster"
 
     # ── Step 1: Basic Info ──────────────────────────────────
-    print("\n📛 [1/8] Basic Info\n")
+    print("\n📛 [1/9] Basic Info\n")
     manifest["name"] = ask("Distro name", required=True)
     manifest["version"] = ask("Version", default="1.0")
     manifest["vendor"] = ask("Vendor / Organization", default="")
     manifest["bug_url"] = ask("Bug report URL (optional)", default="", required=False)
 
-    # ── Step 2: Base ISO ────────────────────────────────────
-    print("\n💿 [2/8] Base ISO\n")
-    manifest["base_iso"] = ask(
-        "Path to base RHEL/CentOS ISO",
-        required=True,
-        validator=validate_iso_path
-    )
+    # ── Step 2: Base ISO or Upstream ────────────────────────
+    if is_build_system:
+        print("\n🌐 [2/9] Upstream Source\n")
+        build_system = {}
+
+        upstream = ask_choice(
+            "Which upstream to base on?",
+            [
+                "centos-stream-9",
+                "centos-stream-10",
+                "rocky-9",
+                "alma-9",
+                "Custom (define your own repos)",
+            ],
+            default=1
+        )
+
+        if "Custom" in upstream:
+            build_system["upstream"] = "custom"
+            print("\n  Define your upstream repos:")
+            custom_repos = {}
+            while True:
+                repo_id = ask("    Repo ID (e.g. baseos)")
+                repo_url = ask("    Base URL")
+                custom_repos[repo_id] = repo_url
+                if not ask_yn("    Add another?", default="n"):
+                    break
+            build_system["upstream_repos"] = custom_repos
+        else:
+            build_system["upstream"] = upstream
+
+        build_system["arch"] = ask_choice(
+            "Target architecture?",
+            ["x86_64", "aarch64"],
+            default=1
+        )
+
+        build_system["tool"] = ask_choice(
+            "Compose tool?",
+            [
+                "lorax — Lighter, faster, good for boot/install ISOs",
+                "pungi — Full compose, production-grade, multi-variant",
+            ],
+            default=1
+        )
+        # Extract just the tool name
+        build_system["tool"] = build_system["tool"].split(" —")[0].strip()
+
+        manifest["build_system"] = build_system
+
+    else:
+        print("\n💿 [2/9] Base ISO\n")
+        manifest["base_iso"] = ask(
+            "Path to base RHEL/CentOS ISO",
+            required=True,
+            validator=validate_iso_path
+        )
 
     # ── Step 3: Branding ────────────────────────────────────
-    print("\n🎨 [3/8] Branding\n")
+    print("\n🎨 [3/9] Branding\n")
     branding = {}
-    branding["os_name"] = manifest["name"]  # Default to distro name
+    branding["os_name"] = manifest["name"]
     branding["os_id"] = ask(
         "OS ID (lowercase, no spaces)",
         default=manifest["name"].lower().replace(" ", "-")
@@ -143,7 +207,7 @@ def run_wizard():
     manifest["branding"] = branding
 
     # ── Step 4: GUI ─────────────────────────────────────────
-    print("\n🖥️  [4/8] Desktop Environment\n")
+    print("\n🖥️  [4/9] Desktop Environment\n")
     gui = {}
     gui["enabled"] = ask_yn("Enable GUI (desktop environment)?")
     if gui["enabled"]:
@@ -159,7 +223,7 @@ def run_wizard():
     manifest["gui"] = gui
 
     # ── Step 5: Repos ───────────────────────────────────────
-    print("\n📦 [5/8] Custom Repositories\n")
+    print("\n📦 [5/9] Custom Repositories\n")
     repos = []
     if ask_yn("Add custom yum/dnf repositories?"):
         while True:
@@ -179,7 +243,7 @@ def run_wizard():
     manifest["repos"] = repos
 
     # ── Step 6: Packages ────────────────────────────────────
-    print("\n📥 [6/8] Packages\n")
+    print("\n📥 [6/9] Packages\n")
     packages = {}
 
     print("  Packages to INSTALL (comma-separated, or empty to skip):")
@@ -200,7 +264,7 @@ def run_wizard():
     manifest["packages"] = packages
 
     # ── Step 7: Kickstart ───────────────────────────────────
-    print("\n📝 [7/8] Kickstart Configuration\n")
+    print("\n📝 [7/9] Kickstart Configuration\n")
     kickstart = {}
     if ask_yn("Use a custom kickstart template?", default="n"):
         kickstart["template"] = ask("Path to kickstart template (.cfg)")
@@ -222,7 +286,7 @@ def run_wizard():
     manifest["kickstart"] = kickstart
 
     # ── Step 8: Advanced ────────────────────────────────────
-    print("\n⚙️  [8/8] Advanced Options\n")
+    print("\n⚙️  [8/9] Advanced Options\n")
 
     if ask_yn("Customize boot menu timeout?", default="n"):
         manifest["boot_timeout"] = int(ask("Timeout in seconds", default="60"))
@@ -240,7 +304,7 @@ def run_wizard():
     else:
         manifest["post_scripts"] = []
 
-    if ask_yn("Enable SE Linux?", default="y"):
+    if ask_yn("Enable SELinux?", default="y"):
         manifest["selinux"] = ask_choice(
             "SELinux mode?",
             ["enforcing", "permissive"],
@@ -258,6 +322,13 @@ def run_wizard():
         manifest["firewall"] = False
         manifest["firewall_services"] = []
 
-    print("\n─" * 44)
+    # ── Step 9: Output ──────────────────────────────────────
+    print("\n📤 [9/9] Output\n")
+    if ask_yn("Generate sample branding assets structure?", default="n"):
+        manifest["generate_sample_assets"] = True
+    else:
+        manifest["generate_sample_assets"] = False
+
+    print("\n" + "─" * 44)
 
     return manifest
