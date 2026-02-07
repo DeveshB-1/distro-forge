@@ -57,6 +57,11 @@ def main():
         action="store_true"
     )
     parser.add_argument(
+        "--tui",
+        help="Use TUI (ncurses) wizard instead of plain text",
+        action="store_true"
+    )
+    parser.add_argument(
         "--generate-assets",
         help="Generate a sample branding assets directory structure",
         metavar="DIR"
@@ -85,6 +90,9 @@ def main():
         with open(config_path) as f:
             manifest = yaml.safe_load(f)
         print(f"📄 Loaded manifest: {args.config}")
+    elif args.tui:
+        from engine.tui import run_tui_wizard
+        manifest = run_tui_wizard()
     else:
         manifest = run_wizard()
 
@@ -134,6 +142,29 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     build_mode = manifest.get("build_mode", "remaster")
+
+    # ── Optional: Rebuild branding RPMs ────────────────────
+    rebuild_config = manifest.get("rebuild", {})
+    if rebuild_config.get("enabled"):
+        from engine.koji_rebuild import KojiRebuilder
+        rebuilder = KojiRebuilder(manifest, output_dir)
+        try:
+            built_rpms = rebuilder.run()
+            repo_dir = rebuilder.generate_repo()
+            if repo_dir:
+                manifest.setdefault("repos", []).append({
+                    "name": f"{manifest['name'].lower()}-branding",
+                    "baseurl": f"file://{repo_dir}",
+                    "gpgcheck": False,
+                    "gpgkey": None,
+                    "enabled": True,
+                })
+            rpms_dir = output_dir / "rpms"
+            if rpms_dir.exists() and list(rpms_dir.glob("*.rpm")):
+                manifest.setdefault("packages", {})["local_rpms"] = str(rpms_dir)
+        except Exception as e:
+            print(f"\n⚠️  RPM rebuild failed: {e}")
+            print("  Continuing with pre-built upstream packages...")
 
     if build_mode == "build_system":
         # Build from scratch

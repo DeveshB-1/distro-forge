@@ -322,8 +322,46 @@ def run_wizard():
         manifest["firewall"] = False
         manifest["firewall_services"] = []
 
-    # ── Step 9: Output ──────────────────────────────────────
-    print("\n📤 [9/9] Output\n")
+    # ── Step 9: Source Rebuild (Koji/Mock) ─────────────────
+    print("\n🔧 [9/10] Source Rebuild (Optional)\n")
+    print("  Rebuild branding RPMs from source (centos-release, logos, etc.)")
+    print("  This replaces upstream packages with your own branded versions.\n")
+
+    rebuild = {}
+    if ask_yn("Rebuild branding RPMs from source?", default="n"):
+        rebuild["enabled"] = True
+        rebuild["backend"] = ask_choice(
+            "Build backend?",
+            [
+                "mock — Local chroot builds (simpler, no server needed)",
+                "koji — Full Koji build system (needs running Koji hub)",
+            ],
+            default=1
+        ).split(" —")[0].strip()
+
+        if rebuild["backend"] == "koji":
+            rebuild["koji_hub"] = ask("Koji hub URL (e.g. https://koji.example.com/kojihub)")
+            rebuild["koji_tag"] = ask("Build tag", default=f"{manifest['branding']['os_id']}-{manifest['version']}-candidate")
+        else:
+            rebuild["mock_config"] = ask("Mock config", default="centos-stream-9-x86_64")
+
+        if ask_yn("Sign built RPMs with GPG key?", default="n"):
+            rebuild["gpg_key_id"] = ask("GPG key ID")
+        else:
+            rebuild["gpg_key_id"] = None
+
+        rebuild["upstream"] = ask_choice(
+            "Upstream to rebuild from?",
+            ["centos-stream", "centos", "rocky", "alma"],
+            default=1
+        )
+    else:
+        rebuild["enabled"] = False
+
+    manifest["rebuild"] = rebuild
+
+    # ── Step 10: Output ─────────────────────────────────────
+    print("\n📤 [10/10] Output\n")
     if ask_yn("Generate sample branding assets structure?", default="n"):
         manifest["generate_sample_assets"] = True
     else:
