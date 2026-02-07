@@ -30,20 +30,38 @@ class ISOEngine:
         # Get volume ID from original ISO
         self.volume_id = self._get_volume_id()
 
-        # Try mounting (requires root on Linux), fall back to 7z/xorriso
-        try:
-            self._extract_with_mount()
-        except (PermissionError, subprocess.CalledProcessError):
+        # Try extraction methods in order of preference:
+        # xorriso (best) → mount (needs root on Linux) → 7z (fallback)
+        extracted = False
+        errors = []
+
+        if shutil.which("xorriso"):
             try:
                 self._extract_with_xorriso()
-            except FileNotFoundError:
-                try:
-                    self._extract_with_7z()
-                except FileNotFoundError:
-                    raise RuntimeError(
-                        "Cannot extract ISO. Install one of: "
-                        "xorriso, 7z, or run as root for mount."
-                    )
+                extracted = True
+            except subprocess.CalledProcessError as e:
+                errors.append(f"xorriso: {e}")
+
+        if not extracted:
+            try:
+                self._extract_with_mount()
+                extracted = True
+            except (PermissionError, OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
+                errors.append(f"mount: {e}")
+
+        if not extracted and shutil.which("7z"):
+            try:
+                self._extract_with_7z()
+                extracted = True
+            except subprocess.CalledProcessError as e:
+                errors.append(f"7z: {e}")
+
+        if not extracted:
+            raise RuntimeError(
+                "Cannot extract ISO. Tried: " +
+                "; ".join(errors) +
+                ". Install xorriso (recommended): brew/dnf install xorriso"
+            )
 
         print(f"  ✅ Extracted to {self.extract_dir}")
         return self.extract_dir
@@ -168,13 +186,41 @@ class ISOEngine:
 
     def _extract_with_xorriso(self):
         """Extract ISO using xorriso."""
-        self._run([
-            "xorriso", "-osirrox", "on",
-            "-indev", str(self.base_iso),
-            "-extract", "/", str(self.extract_dir)
-        ])
+        # Use -abort_on NEVER to handle hybrid ISOs where some files
+        # span past the ISO9660 boundary (El Torito boot partitions).
+        # These files are still extracted correctly in practice.
+        result = subprocess.run(
+            [
+                "xorriso", "-abort_on", "NEVER",
+                "-osirrox", "on",
+                "-indev", str(self.base_iso),
+                "-extract", "/", str(self.extract_dir)
+            ],
+            capture_output=True, text=True
+        )
+        # xorriso may return non-zero even on partial success.
+        # Check if we actually got files.
+        extracted_files = list(self.extract_dir.iterdir())
+        if not extracted_files:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                "xorriso",
+                output=result.stdout,
+                stderr=result.stderr
+            )
+        if result.stderr and "FAILURE" in result.stderr:
+            # Log warnings but don't fail — hybrid ISOs always trigger these
+            failures = [l for l in result.stderr.splitlines() if "FAILURE" in l]
+            for f in failures[:3]:
+                print(f"  ⚠️  {f.strip()}")
+            if len(failures) > 3:
+                print(f"  ⚠️  ... and {len(failures) - 3} more warnings")
+
         # Fix permissions (xorriso extracts read-only)
-        self._run(["chmod", "-R", "u+w", str(self.extract_dir)])
+        subprocess.run(
+            ["chmod", "-R", "u+w", str(self.extract_dir)],
+            capture_output=True
+        )
 
     def _extract_with_7z(self):
         """Extract ISO using 7z."""

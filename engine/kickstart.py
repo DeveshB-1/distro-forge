@@ -245,33 +245,34 @@ reboot --eject
     def _inject_ks_boot_param(self):
         """Add inst.ks parameter to boot configurations."""
 
-        # GRUB config
+        import re
+
+        # GRUB config — append inst.ks to linuxefi/linux kernel lines
         for grub_path in [
             self.iso_root / "EFI" / "BOOT" / "grub.cfg",
             self.iso_root / "boot" / "grub2" / "grub.cfg",
         ]:
             if grub_path.exists():
                 content = grub_path.read_text()
-                # Add inst.ks to kernel boot lines if not already present
                 if "inst.ks" not in content:
-                    # Match linuxefi or linux lines with boot params
-                    import re
+                    # Match only actual kernel boot lines (start with whitespace + linuxefi/linux)
                     content = re.sub(
-                        r"(linux(?:efi)?\s+\S+\s+.*?)(\s*\n)",
-                        r"\1 inst.ks=cdrom:/ks.cfg\2",
-                        content
+                        r"(^\s+linux(?:efi)?\s+/\S+\s+.*?)(\s*$)",
+                        r"\1 inst.ks=cdrom:/ks.cfg",
+                        content,
+                        flags=re.MULTILINE
                     )
                     grub_path.write_text(content)
 
-        # isolinux config
+        # isolinux config — append inst.ks to append lines
         isolinux_cfg = self.iso_root / "isolinux" / "isolinux.cfg"
         if isolinux_cfg.exists():
             content = isolinux_cfg.read_text()
             if "inst.ks" not in content:
-                import re
                 content = re.sub(
-                    r"(append\s+.*?)(\s*\n)",
-                    r"\1 inst.ks=cdrom:/ks.cfg\2",
-                    content
+                    r"(^\s*append\s+.*?)(\s*$)",
+                    r"\1 inst.ks=cdrom:/ks.cfg",
+                    content,
+                    flags=re.MULTILINE
                 )
                 isolinux_cfg.write_text(content)
