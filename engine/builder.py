@@ -70,11 +70,9 @@ class Builder:
             output_filename = f"{self.name}-{self.version}-x86_64.iso"
             output_path = self.output_dir / output_filename
 
-            # Determine volume ID
-            vol_id = f"{self.name}-{self.version}-x86_64"
-            # Volume IDs have a 32 char limit
-            if len(vol_id) > 32:
-                vol_id = vol_id[:32]
+            # Use the same volume ID that the branding engine
+            # patched into the boot configs (CRITICAL for boot)
+            vol_id = branding_engine.new_volume_id
 
             iso_engine.repack(output_path, volume_id=vol_id)
 
